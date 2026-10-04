@@ -22,6 +22,10 @@ UnicodeUtils works with Ruby 1.9.1 or later.
 
     UnicodeUtils.upcase("i", :tr) => "İ"
 
+    require "unicode_utils/scsu"
+
+    UnicodeUtils::SCSU.encode("ελληνικά") # compact binary SCSU representation
+
 Start with the UnicodeUtils module in the API documentation for
 complete documentation.
 
