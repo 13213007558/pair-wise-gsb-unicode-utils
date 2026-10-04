@@ -25,6 +25,27 @@ UnicodeUtils works with Ruby 1.9.1 or later.
 Start with the UnicodeUtils module in the API documentation for
 complete documentation.
 
+== UnicodeSet
+
+UnicodeUtils::UnicodeSet implements an ICU compatible UnicodeSet subset for
+Unicode 6.2.0:
+
+    require "unicode_utils/unicode_set"
+
+    set = UnicodeUtils::UnicodeSet.new("[[a-z]&[:Letter:]-x{ch}]")
+    set.include?("a")  # => true
+    set.include?("x")  # => false
+    set.include?("ch") # => true
+    set.to_pattern     # => canonical pattern
+
+The subset supports code points and ranges, implicit union, intersection
+with <tt>&</tt>, difference with <tt>-</tt>, nested sets, complement with a
+leading <tt>^</tt>, ICU escapes, braced multi-character string elements,
+General_Category aliases, binary property aliases from PropList and
+DerivedCoreProperties, and the ANY, ASCII and ASSIGNED pseudo-properties.
+Braced strings are whole elements; <tt>[{ab}]</tt> does not contain <tt>a</tt>.
+Script, Block and other non-binary enumeration properties are not included.
+
 == License
 
 unicode_utils is licensed under the BSD license. Read the file

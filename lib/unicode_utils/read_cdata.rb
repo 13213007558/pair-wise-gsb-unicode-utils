@@ -40,6 +40,31 @@ module UnicodeUtils
       }
     end
 
+    def self.read_code_point_range_map(filename)
+      Hash.new.tap { |map|
+        open_cdata_file(filename) do |input|
+          input.each_line { |line|
+            name, ranges = line.chomp.split(";", 2)
+            map[name] = ranges.split(",").map { |part|
+              first, last = part.split("-", 2)
+              [first.to_i(16), (last || first).to_i(16)]
+            }
+          }
+        end
+      }
+    end
+
+    def self.read_two_column_name_map(filename)
+      Hash.new.tap { |map|
+        open_cdata_file(filename) do |input|
+          input.each_line { |line|
+            canonical, alias_name = line.chomp.split(";", 2)
+            map[alias_name] = canonical
+          }
+        end
+      }
+    end
+
     def self.read_code_point_map(filename)
       Hash.new.tap { |map|
         open_cdata_file(filename) do |input|

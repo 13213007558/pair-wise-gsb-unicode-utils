@@ -688,6 +688,100 @@ module UnicodeUtils
       end
     end
 
+    def compile_unicode_set_properties
+      sets = Hash.new { |hash, key| hash[key] = [] }
+      ["PropList.txt", "DerivedCoreProperties.txt"].each do |filename|
+        each_property(filename, flatten_ranges: false) { |prop|
+          range =
+            if prop.code_point.kind_of?(Range)
+              prop.code_point
+            else
+              Range.new(prop.code_point, prop.code_point)
+            end
+          sets[prop.property] << [range.begin, range.end]
+        }
+      end
+
+      File.open(File.join(@cdatadir, "unicode_set_general_categories"), "w:US-ASCII") do |output|
+        general_category_sets = Hash.new { |hash, key| hash[key] = [] }
+        File.open(File.join(@datadir, "UnicodeData.txt"), "r:US-ASCII") do |input|
+          input.each_line { |line|
+            fields = line.chomp.split(";")
+            first = fields[0].to_i(16)
+            category = fields[2]
+            if fields[1] =~ /^<.*, First>$/
+              last_line = input.gets
+              last_fields = last_line.chomp.split(";")
+              last = last_fields[0].to_i(16)
+              raise unless last_fields[2] == category
+            else
+              last = first
+            end
+            general_category_sets[category] << [first, last]
+          }
+        end
+        assigned = []
+        general_category_sets.each { |_, ranges| assigned.concat(ranges) }
+        general_category_sets["Cn"] =
+          subtract_code_point_ranges([[0, 0x10FFFF]], merge_code_point_ranges(assigned))
+        general_category_sets.keys.sort.each { |name|
+          ranges = merge_code_point_ranges(general_category_sets[name])
+          encoded = ranges.map { |first, last|
+            "#{format_code_point(first)}-#{format_code_point(last)}"
+          }.join(",")
+          output.puts "#{name};#{encoded}"
+        }
+      end
+
+      File.open(File.join(@cdatadir, "unicode_set_general_category_aliases"), "w:US-ASCII") do |output|
+        data_fn = File.join(@datadir, "PropertyValueAliases.txt")
+        File.open(data_fn, "r:US-ASCII") do |input|
+          each_significant_line(input) { |line|
+            fields = line.split(";").map(&:strip)
+            if fields[0] == "gc"
+              alias_names = [fields[1], fields[2]].concat(fields[3..-1] || [])
+              alias_names << "L&" if fields[1] == "LC"
+              alias_names.uniq.each { |alias_name|
+                output.puts "#{fields[1]};#{alias_name}"
+              }
+            end
+          }
+        end
+      end
+
+      aliases = Hash.new { |hash, key| hash[key] = [] }
+      data_fn = File.join(@datadir, "PropertyValueAliases.txt")
+      File.open(data_fn, "r:US-ASCII") do |input|
+        canonical = nil
+        input.each_line { |line|
+          if line =~ /^#\s+([^\s(]+)\s+\(([^)]+)\)/
+            canonical = $1
+          elsif line =~ /^[^#].*;\s*(?:Yes|True|T)\s*;/ && sets.include?(canonical)
+            fields = line.split(";").map(&:strip)
+            aliases[canonical] << fields[0]
+          end
+        }
+      end
+
+      File.open(File.join(@cdatadir, "unicode_set_properties"), "w:US-ASCII") do |output|
+        sets.keys.sort.each { |name|
+          ranges = merge_code_point_ranges(sets[name])
+          encoded = ranges.map { |first, last|
+            "#{format_code_point(first)}-#{format_code_point(last)}"
+          }.join(",")
+          output.puts "#{name};#{encoded}"
+        }
+      end
+
+      File.open(File.join(@cdatadir, "unicode_set_property_aliases"), "w:US-ASCII") do |output|
+        sets.keys.sort.each { |name|
+          ([name] + aliases[name]).uniq.each { |alias_name|
+            output.puts "#{name};#{alias_name}"
+          }
+        }
+      end
+    end
+
     def run
       compile_unicode_data
       compile_special_casing
@@ -704,6 +798,34 @@ module UnicodeUtils
       compile_property_value_aliases
       compile_name_aliases
       compile_white_space_set
+      compile_unicode_set_properties
+    end
+
+    def merge_code_point_ranges(ranges)
+      sorted = ranges.sort_by { |first, _| first }
+      sorted.each_with_object([]) { |(first, last), merged|
+        if merged.empty? || first > merged.last[1] + 1
+          merged << [first, last]
+        elsif last > merged.last[1]
+          merged.last[1] = last
+        end
+      }
+    end
+
+    def subtract_code_point_ranges(ranges, removed_ranges)
+      result = []
+      ranges.each { |first, last|
+        removed_ranges.each { |removed_first, removed_last|
+          next if removed_last < first || removed_first > last
+          if removed_first > first
+            result << [first, removed_first - 1]
+          end
+          first = removed_last + 1
+          break if first > last
+        }
+        result << [first, last] if first <= last
+      }
+      result
     end
 
     def format_code_point(cp)
