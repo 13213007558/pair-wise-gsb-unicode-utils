@@ -167,7 +167,8 @@ module UnicodeUtils
       }
     end
 
-    def each_property(filename, opts = {flatten_ranges: true})
+    def each_property(filename, opts = nil)
+      opts = {flatten_ranges: true}.merge(opts || {})
       data_fn = File.join(@datadir, filename)
       File.open(data_fn, "r:US-ASCII") do |input|
         each_significant_line(input) { |line|
@@ -592,7 +593,7 @@ module UnicodeUtils
       range_file =
         File.open(File.join(@cdatadir, "east_asian_width_property_ranges"),
                   "w:us-ascii")
-      each_property("EastAsianWidth.txt", flatten_ranges: false) { |prop|
+      each_property("EastAsianWidth.txt", {flatten_ranges: false}) { |prop|
         next if prop.property == "N"
         i = props[prop.property] ||
           raise("unknown property value #{prop.property}")
@@ -688,6 +689,149 @@ module UnicodeUtils
       end
     end
 
+    def compile_unicode_set_properties
+      path = File.join(@cdatadir, "unicode_set_properties")
+      sets = Hash.new { |hash, key| hash[key] = [] }
+
+      per_cp_path = File.join(@cdatadir, "general_category_per_cp")
+      File.open(per_cp_path, "r:US-ASCII") do |input|
+        buffer = "x" * 6
+        while input.read(6, buffer)
+          code_point = buffer.to_i(16)
+          category = input.read(2)
+          sets[category] << code_point
+        end
+      end
+      ranges_path = File.join(@cdatadir, "general_category_ranges")
+      File.open(ranges_path, "r:US-ASCII") do |input|
+        cp_buffer = "x" * 6
+        while input.read(6, cp_buffer)
+          first = cp_buffer.to_i(16)
+          input.read(6, cp_buffer)
+          last = cp_buffer.to_i(16)
+          category = input.read(2)
+          sets[category] << (first..last)
+        end
+      end
+
+      sets.keys.dup.each do |category|
+        sets[category[0]].concat(sets[category])
+      end
+      sets["LC"].concat(sets["Lu"]).concat(sets["Ll"]).concat(sets["Lt"])
+
+      ["PropList.txt", "DerivedCoreProperties.txt"].each do |filename|
+        each_property(filename, {flatten_ranges: false}) do |prop|
+          sets[prop.property] << prop.code_point
+        end
+      end
+
+      binary_aliases = {
+        "ASCII_Hex_Digit" => ["AHex"],
+        "Alphabetic" => ["Alpha"],
+        "Bidi_Control" => ["Bidi_C"],
+        "Case_Ignorable" => ["CI"],
+        "Cased" => [],
+        "Changes_When_Casefolded" => ["CWCF"],
+        "Changes_When_Casemapped" => ["CWCM"],
+        "Changes_When_Lowercased" => ["CWL"],
+        "Changes_When_Titlecased" => ["CWT"],
+        "Changes_When_Uppercased" => ["CWU"],
+        "Dash" => [],
+        "Default_Ignorable_Code_Point" => ["DI"],
+        "Deprecated" => ["Dep"],
+        "Diacritic" => ["Dia"],
+        "Extender" => ["Ext"],
+        "Grapheme_Base" => ["Gr_Base"],
+        "Grapheme_Extend" => ["Gr_Ext"],
+        "Grapheme_Link" => ["Gr_Link"],
+        "Hex_Digit" => ["Hex"],
+        "Hyphen" => [],
+        "ID_Continue" => ["IDC"],
+        "ID_Start" => ["IDS"],
+        "IDS_Binary_Operator" => ["IDSB"],
+        "IDS_Trinary_Operator" => ["IDST"],
+        "Ideographic" => ["Ideo"],
+        "Join_Control" => ["Join_C"],
+        "Logical_Order_Exception" => ["LOE"],
+        "Lowercase" => ["Lower"],
+        "Math" => [],
+        "Noncharacter_Code_Point" => ["NChar"],
+        "Other_Alphabetic" => ["OAlpha"],
+        "Other_Default_Ignorable_Code_Point" => ["ODI"],
+        "Other_Grapheme_Extend" => ["OGr_Ext"],
+        "Other_ID_Continue" => ["OIDC"],
+        "Other_ID_Start" => ["OIDS"],
+        "Other_Lowercase" => ["OLower"],
+        "Other_Math" => ["OMath"],
+        "Other_Uppercase" => ["OUpper"],
+        "Pattern_Syntax" => ["Pat_Syn"],
+        "Pattern_White_Space" => ["Pat_WS"],
+        "Quotation_Mark" => ["QMark"],
+        "Radical" => [],
+        "STerm" => [],
+        "Soft_Dotted" => ["SD"],
+        "Terminal_Punctuation" => ["Term"],
+        "Unified_Ideograph" => ["UIdeo"],
+        "Uppercase" => ["Upper"],
+        "Variation_Selector" => ["VS"],
+        "White_Space" => ["WSpace"],
+        "XID_Continue" => ["XIDC"],
+        "XID_Start" => ["XIDS"]
+      }
+      aliases = Hash.new { |hash, key| hash[key] = [] }
+      data_fn = File.join(@datadir, "PropertyValueAliases.txt")
+      File.open(data_fn, "r:US-ASCII") do |input|
+        each_significant_line(input) do |line|
+          fields = line.split(";").map(&:strip)
+          if fields[0] == "gc"
+            aliases[fields[2]].push(fields[1])
+          end
+        end
+      end
+      binary_aliases.each { |name, short_names| aliases[name].concat(short_names) }
+
+      canonical_names = aliases.keys
+      canonical_names.uniq!
+      canonical_names.sort!
+
+      File.open(path, "w:UTF-8") do |output|
+        output.puts "# Unicode 6.2.0"
+        canonical_names.each do |name|
+          category = aliases[name].first
+          values_source =
+            if name =~ /^[A-Z][a-z]/ && sets.key?(category)
+              category
+            elsif sets.key?(name)
+              name
+            else
+              category
+            end
+          values = (sets[values_source] || []).map { |value|
+            value.kind_of?(Range) ? value : (value..value)
+          }.sort_by(&:begin)
+          ranges = []
+          values.each do |value|
+            first = value.begin
+            last = value.end
+            if !ranges.empty? && first <= ranges.last.end
+              ranges[-1] = (ranges.last.begin..[ranges.last.end, last].max)
+            else
+              ranges << (first..last)
+            end
+          end
+          names = ([name] + aliases[name]).uniq
+          output.puts(names.join(","))
+          output.puts(ranges.map { |range|
+            if range.begin == range.end
+              format_code_point(range.begin)
+            else
+              "#{format_code_point(range.begin)}-#{format_code_point(range.end)}"
+            end
+          }.join(" "))
+        end
+      end
+    end
+
     def run
       compile_unicode_data
       compile_special_casing
@@ -704,6 +848,7 @@ module UnicodeUtils
       compile_property_value_aliases
       compile_name_aliases
       compile_white_space_set
+      compile_unicode_set_properties
     end
 
     def format_code_point(cp)
